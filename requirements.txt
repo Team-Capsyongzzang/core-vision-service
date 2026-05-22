@@ -1,0 +1,8 @@
+# CORE Vision Service
+# PyTorch는 Dockerfile 베이스 이미지에 포함됨
+
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+Pillow>=9.0.0
+numpy>=1.24.0
+httpx>=0.25.0        # 대시보드 서버로 결과 전송
