@@ -1,0 +1,16 @@
+# 체크포인트 (EBS에 별도 보관)
+checkpoints/
+
+# 환경변수
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
