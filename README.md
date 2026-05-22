@@ -1,7 +1,10 @@
-# CORE Vision Service
+# core-vision-service
 
-위성 이미지 재난 탐지 및 분류 추론 서버.  
-대시보드(`core-dashboard`)와 분리된 별도 서비스입니다.
+CORE (Cloud-Optimized Resource-Efficient Vision System)  
+위성 이미지 재난 탐지 및 분류 추론 서버.
+
+> 학습/실험 코드는 별도 리포(`xbd_disaster_classifier`)에서 관리합니다.  
+> 이 리포는 **추론 서빙**만 담당합니다.
 
 ---
 
@@ -11,12 +14,11 @@
 core-vision-service/
 ├── main.py              ← FastAPI 진입점
 ├── api/
-│   └── queue.py         ← POST /api/queue  (민규 수신)
-│                           GET  /api/queue/status
+│   └── jobs.py          ← POST /jobs (민규 스크리닝 결과 수신)
 ├── core/
 │   ├── pipeline.py      ← 탐지기 + 분류기 추론
-│   ├── queue_manager.py ← 우선순위 큐 (score 기준 정렬)
-│   └── worker.py        ← 큐 처리 → 대시보드로 결과 전송
+│   ├── queue_manager.py ← 우선순위 큐
+│   └── worker.py        ← 큐 처리 → S3 이미지 로드 → 추론 → 대시보드 전송
 ├── models/
 │   ├── backbone.py      ← 9개 백본 팩토리
 │   ├── detector.py      ← 재난 탐지기 (이진 분류)
@@ -36,13 +38,68 @@ core-vision-service/
 ## 흐름
 
 ```
-민규 스크리닝
-    ↓ POST /api/queue
-우선순위 큐 (score 내림차순)
-    ↓ 워커가 순차 처리
-탐지기 → 분류기
-    ↓ POST DASHBOARD_URL
-대시보드 서버 (/api/ingest)
+민규 스크리닝 서버
+    ↓ POST /jobs
+우선순위 큐
+  priority 3(high) → 2(medium) → 1(low) → 0(no_building)
+  같은 priority면 created_at 빠른 것부터
+    ↓ 워커
+S3에서 이미지 다운로드
+    ↓
+탐지기(ResNet50) → 분류기(ResNet101)
+    ↓ POST /api/ingest
+대시보드 서버 (core-dashboard)
+```
+
+---
+
+## API
+
+### POST /jobs
+
+민규 스크리닝 서버에서 호출하는 엔드포인트.
+
+**Request**
+```json
+{
+  "image_id":       "tile_000123",
+  "pre_image_uri":  "s3://your-bucket/selected-images/tile_000123_pre.png",
+  "post_image_uri": "s3://your-bucket/selected-images/tile_000123_post.png",
+  "priority":       3,
+  "created_at":     "2026-05-22T14:30:00+09:00"
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `image_id` | string | 이미지 쌍 ID |
+| `pre_image_uri` | string | 재난 전 이미지 S3 URI |
+| `post_image_uri` | string | 재난 후 이미지 S3 URI |
+| `priority` | int | 3=high / 2=medium / 1=low / 0=no_building |
+| `created_at` | string | job 생성 시간 (ISO 8601) |
+
+**Response**
+```json
+// 성공 (HTTP 200)
+{ "status": "accepted", "image_id": "tile_000123" }
+
+// 실패 (HTTP 400)
+{ "status": "error", "message": "missing pre_image_uri" }
+```
+
+### GET /api/health
+
+```json
+{
+  "status":   "ok",
+  "pipeline": true,
+  "queue": {
+    "waiting":    3,
+    "processing": 1,
+    "completed":  42,
+    "failed":     0
+  }
+}
 ```
 
 ---
@@ -60,9 +117,9 @@ pip install -r requirements.txt
 
 # 환경변수
 cp .env.example .env
-# DETECTOR_CKPT, CLASSIFIER_CKPT 경로 수정
 
 # 체크포인트 복사 (학습 리포에서)
+mkdir -p checkpoints/detector checkpoints/classifier
 cp ../xbd_disaster_classifier/checkpoints/detector/best_ft.pth  checkpoints/detector/
 cp ../xbd_disaster_classifier/checkpoints/classifier/best_ft.pth checkpoints/classifier/
 
@@ -72,66 +129,56 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 ---
 
-## API
+## 환경변수
 
-| 메서드 | 경로 | 설명 |
-|---|---|---|
-| `GET` | `/api/health` | 서버 상태 + 큐 현황 |
-| `POST` | `/api/queue` | 스크리닝 결과 수신 |
-| `GET` | `/api/queue/status` | 큐 처리 현황 |
+```env
+# 모델 체크포인트 (EBS PVC 마운트 경로)
+DETECTOR_CKPT=/model/detector/best_ft.pth
+CLASSIFIER_CKPT=/model/classifier/best_ft.pth
 
-### POST /api/queue 스펙
+# 결과 전송 대상 (대시보드 서버)
+DASHBOARD_URL=http://dashboard-service:8001/api/ingest
 
-```json
-[
-  {
-    "tile_id":   "region_A_00000371",
-    "pre_path":  "/data/pre/region_A_pre.png",
-    "post_path": "/data/post/region_A_post.png",
-    "score":     0.87,
-    "priority":  "high",
-    "lat":       34.05,
-    "lng":       -118.24
-  }
-]
-```
-
-### 대시보드로 전송하는 결과
-
-```json
-{
-  "id":           "a1b2c3d4",
-  "tile_id":      "region_A_00000371",
-  "timestamp":    "2026-05-08T12:34:56Z",
-  "disaster":     "wildfire",
-  "confidence":   0.87,
-  "has_disaster": 1,
-  "det_prob":     0.92,
-  "det_ms":       6.8,
-  "cls_ms":       7.1,
-  "priority":     "high",
-  "score":        0.87,
-  "lat":          34.05,
-  "lng":          -118.24
-}
+# 추론 디바이스
+DEVICE=cuda
 ```
 
 ---
 
-## 배포
+## 배포 (민영이 담당)
 
-```bash
-# ECR 빌드 & 푸시
-docker build -t core-vision-service .
-docker tag core-vision-service:latest <ECR_REPO>/core-vision-service:latest
-docker push <ECR_REPO>/core-vision-service:latest
-```
+### 민영이에게 전달할 내용
 
-민영이(인프라)에게 전달:
 ```
+GitHub 리포    : https://github.com/KWNahyun/core-vision-service
+ECR 이미지명   : core-vision-service
 포트           : 8000
 GPU 필요       : nvidia.com/gpu: 1 (p3.xlarge)
-PVC 필요       : checkpoints/ (5Gi)
+EBS PVC        : /model/ (initContainer가 S3에서 pth 다운로드)
+S3 모델 경로   : s3://my-mlops-prod-models/models/model.tar.gz
 환경변수       : .env.example 참고
+네임스페이스   : disaster-monitor (민규 서버와 동일)
 Service 이름   : vision-service:8000
 ```
+
+### 모델 파일 업로드 (학습 완료 후)
+
+```bash
+cd ~/xbd_disaster_classifier_vb
+
+tar -czvf model.tar.gz \
+  checkpoints/detector/best_ft.pth \
+  checkpoints/classifier/best_ft.pth
+
+aws s3 cp model.tar.gz s3://my-mlops-prod-models/models/model.tar.gz
+```
+
+---
+
+## 관련 리포
+
+| 리포 | 역할 |
+|---|---|
+| `xbd_disaster_classifier` | 학습 및 실험 |
+| `core-vision-service` | 추론 서빙 (이 리포) |
+| `core-dashboard` | 대시보드 프론트 + 백엔드 |
