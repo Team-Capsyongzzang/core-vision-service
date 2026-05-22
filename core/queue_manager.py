@@ -1,7 +1,11 @@
 """
 core/queue_manager.py
 =====================
-우선순위 큐 — 민규 스크리닝 결과를 score 기준 정렬 후 처리.
+우선순위 큐.
+
+정렬 기준:
+  1. priority 내림차순 (3 → 2 → 1 → 0)
+  2. 같은 priority면 created_at 오름차순 (먼저 생성된 것부터)
 """
 
 from __future__ import annotations
@@ -21,17 +25,23 @@ class Status(str, Enum):
 
 @dataclass
 class QueueItem:
-    tile_id:   str
-    pre_path:  str
-    post_path: str
-    score:     float
-    priority:  str        = "medium"
-    lat:       float | None = None
-    lng:       float | None = None
-    status:    Status     = Status.WAITING
-    timestamp: str        = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
+    image_id:       str
+    pre_image_uri:  str
+    post_image_uri: str
+    priority:       int              # 3=high, 2=medium, 1=low, 0=no_building
+    priority_label: str              # "high" / "medium" / "low" / "no_building"
+    created_at:     datetime
+    status:         Status = Status.WAITING
+
+    def __lt__(self, other: "QueueItem") -> bool:
+        """
+        정렬 기준:
+          priority 높은 것 먼저 (내림차순)
+          같은 priority면 created_at 빠른 것 먼저 (오름차순)
+        """
+        if self.priority != other.priority:
+            return self.priority > other.priority
+        return self.created_at < other.created_at
 
 
 class QueueManager:
@@ -42,11 +52,11 @@ class QueueManager:
         self._fail_count: int = 0
         self._lock = asyncio.Lock()
 
-    async def enqueue_batch(self, items: list[QueueItem]):
-        """score 내림차순 정렬 후 큐 추가."""
+    async def enqueue(self, item: QueueItem):
+        """큐에 추가 후 정렬."""
         async with self._lock:
-            self._waiting.extend(items)
-            self._waiting.sort(key=lambda x: x.score, reverse=True)
+            self._waiting.append(item)
+            self._waiting.sort()   # QueueItem.__lt__ 기준 정렬
 
     async def dequeue(self) -> QueueItem | None:
         async with self._lock:
@@ -54,17 +64,17 @@ class QueueManager:
                 return None
             item        = self._waiting.pop(0)
             item.status = Status.PROCESSING
-            self._processing[item.tile_id] = item
+            self._processing[item.image_id] = item
         return item
 
-    async def complete(self, tile_id: str):
+    async def complete(self, image_id: str):
         async with self._lock:
-            self._processing.pop(tile_id, None)
+            self._processing.pop(image_id, None)
             self._done_count += 1
 
-    async def fail(self, tile_id: str):
+    async def fail(self, image_id: str):
         async with self._lock:
-            self._processing.pop(tile_id, None)
+            self._processing.pop(image_id, None)
             self._fail_count += 1
 
     def get_status(self) -> dict:
