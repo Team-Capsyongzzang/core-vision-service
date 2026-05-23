@@ -3,7 +3,7 @@
 CORE (Cloud-Optimized Resource-Efficient Vision System)  
 위성 이미지 재난 탐지 및 분류 추론 서버.
 
-> 학습/실험 코드는 별도 리포(`xbd_disaster_classifier`)에서 관리합니다.  
+> 학습/실험 코드는 별도 리포(`core-vision-experiment`)에서 관리합니다.  
 > 이 리포는 **추론 서빙**만 담당합니다.
 
 ---
