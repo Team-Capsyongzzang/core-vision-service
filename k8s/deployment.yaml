@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vision-service
+  namespace: disaster-monitor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vision-service
+  template:
+    metadata:
+      labels:
+        app: vision-service
+    spec:
+      serviceAccountName: vision-service-sa
+      initContainers:
+        - name: model-downloader
+          image: amazonlinux:2
+          command:
+            - /bin/sh
+            - -c
+            - |
+              yum install -y aws-cli tar gzip -q
+              aws s3 cp s3://my-mlops-prod-models/models/model.tar.gz /tmp/model.tar.gz
+              mkdir -p /model/detector /model/classifier
+              tar -xzf /tmp/model.tar.gz -C /model/
+              rm /tmp/model.tar.gz
+          volumeMounts:
+            - name: model-storage
+              mountPath: /model
+      containers:
+        - name: vision-service
+          image: 264935030068.dkr.ecr.ap-northeast-2.amazonaws.com/my-mlops-prod-vision-service:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DETECTOR_CKPT
+              value: /model/detector/best_ft.pth
+            - name: CLASSIFIER_CKPT
+              value: /model/classifier/best_ft.pth
+            - name: DASHBOARD_URL
+              value: http://dashboard-service:8001/api/ingest
+            - name: DEVICE
+              value: cuda
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+            requests:
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: model-storage
+              mountPath: /model
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: vision-model-pvc
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Equal"
+          value: "true"
+          effect: "NoSchedule"
+      nodeSelector:
+        karpenter.sh/nodepool: gpu-nodepool

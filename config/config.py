@@ -25,7 +25,7 @@ class ModelConfig:
 
 @dataclass
 class DetectorConfig:
-    backbone:   str   = "resnet50"
+    backbone:   str   = "resnet101"
     dropout:    float = 0.3
     threshold:  float = 0.4
     image_size: int   = 224
