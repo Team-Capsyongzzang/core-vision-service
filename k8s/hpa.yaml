@@ -1,0 +1,31 @@
+# vision-service를 GPU 사용률 기준으로 스케일하는 HPA.
+# External 메트릭(dcgm_gpu_utilization_avg)은 prometheus-adapter가 노출해야 동작한다.
+# 실제 규칙은 prometheus-adapter-rule.yaml 참고 — 클러스터의 prometheus-adapter Helm values에 병합 필요.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vision-service-hpa
+  namespace: disaster-monitor
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vision-service
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: dcgm_gpu_utilization_avg
+          selector:
+            matchLabels:
+              namespace: disaster-monitor
+        target:
+          type: AverageValue
+          averageValue: "50"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300

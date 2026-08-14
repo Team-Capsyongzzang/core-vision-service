@@ -5,6 +5,8 @@ metadata:
   namespace: disaster-monitor
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: vision-service
@@ -31,7 +33,7 @@ spec:
               mountPath: /model
       containers:
         - name: vision-service
-          image: 264935030068.dkr.ecr.ap-northeast-2.amazonaws.com/my-mlops-prod-vision-service:latest
+          image: 264935030068.dkr.ecr.ap-northeast-2.amazonaws.com/my-mlops-prod-vision-service:vision-service-48e78985a4822c9636d98067a14128b37a7bf69e
           ports:
             - containerPort: 8000
           env:

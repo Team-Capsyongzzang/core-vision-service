@@ -1,0 +1,16 @@
+# hpa.yaml이 참조하는 external metric(dcgm_gpu_utilization_avg)을 노출하려면
+# 클러스터에 이미 떠 있는 prometheus-adapter Helm release의 values에 아래 rules.external 항목을 병합해야 한다.
+# (이 레포는 prometheus-adapter를 직접 배포하지 않음 — DCGM Exporter + Prometheus는 별도로 이미 구성돼 있다는 전제)
+#
+# 참고: g4dn.xlarge는 GPU 1장(T4, MIG 미지원)이라 pod 1개당 GPU 1개를 점유한다.
+# 즉 HPA가 스케일아웃해도 노드당 vision-service pod는 1개만 뜨고, Karpenter가 그만큼 GPU 노드를 추가한다.
+# "GPU 사용률 50%"는 pod 내부 공유가 아니라 "노드 추가가 필요한 시점"을 판단하는 트리거로 쓰인다.
+rules:
+  external:
+    - seriesQuery: 'DCGM_FI_DEV_GPU_UTIL{namespace="disaster-monitor"}'
+      resources:
+        overrides:
+          namespace: { resource: "namespace" }
+      name:
+        as: "dcgm_gpu_utilization_avg"
+      metricsQuery: 'avg(<<.Series>>{<<.LabelMatchers>>})'
